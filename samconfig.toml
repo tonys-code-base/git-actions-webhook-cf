@@ -1,0 +1,16 @@
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "git-actions-webhook"
+capabilities = "CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+resolve_s3 = true
+region = "us-east-1"
+profile = "my-aws-shared-creds-profile"
+
+[default.sync.parameters]
+watch = true

@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  github-webhook
+
+  Amazon EventBridge Inbound webhooks using lambda fURLs CFN Template.
+
+Parameters:
+  GithubWebhookSecret:
+    Type: String
+    Description: Github webhook secret
+    NoEcho: true
+    AllowedPattern: ".+"
+
+  GithubWebhookSecretName:
+    Type: String
+    Description: Github webhook secret name
+    Default: "git-actions-webhook-secret"
+
+  EventBusName:
+    Type: String
+    Description: EventBridge event bus name
+    Default: "git-actions-event-bus"
+
+  LambdaFunctionName:
+    Type: String
+    Description: Lambda function name
+    Default: "git-actions-webhook-lambda-function"
+
+  LambdaInvocationThreshold:
+    Type: String
+    Description: Innovation Alarm Threshold for number of events in a 5 minute period.
+    Default: "2000"
+
+  CWInvocationsAlarmName:
+    Type: String
+    Description: Alarm name for Inbound webhook Lambda invocation traffic spikes
+    Default: "git-actions-webhook-invocations-alarm"
+
+  S3BucketForLambdaCode:
+    Type: String
+    Description: S3 bucket where lambda zip source is located
+    Default: "my-lambda-function-code"
+
+  S3KeyLambdaZip:
+    Type: String
+    Description: S3 key of the lambda zip package
+    Default: "lambda_src.zip"
+
+Resources:
+  WebhookSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${GithubWebhookSecretName}"
+      Description: Secrets Manager for storing Webhook Secret
+      SecretString: !Ref GithubWebhookSecret
+
+  LambdaInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub Alarm for Inbound webhook Lambda for traffic spikes
+      AlarmName: !Sub "${CWInvocationsAlarmName}"
+      MetricName: Invocations
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: "300"
+      EvaluationPeriods: "2"
+      Threshold: !Ref LambdaInvocationThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebhookFunction
+      ComparisonOperator: GreaterThanThreshold
+  WebhookFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub "${S3BucketForLambdaCode}"
+        S3Key: !Sub "${S3KeyLambdaZip}"
+      FunctionName: !Sub "${LambdaFunctionName}"
+      Handler: lambda_src.lambda_handler
+      PackageType: Zip
+      Architectures:
+        - x86_64      
+      MemorySize: 128
+      Role: !GetAtt 
+        - WebhookFunctionRole
+        - Arn
+      Runtime: python3.10
+      Timeout: 100
+      Environment:
+        Variables:
+          GITHUB_WEBHOOK_SECRET_ARN: !Ref WebhookSecretsManager
+          EVENT_BUS_NAME: !Ref EventBusName
+      Tags:
+        - Key: 'lambda:createdBy'
+          Value: SAM
+      ReservedConcurrentExecutions: 10
+  WebhookFunctionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub "${LambdaFunctionName}-role"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: WebhookFunctionRolePolicy0
+          PolicyDocument:
+            Statement:
+              - Action: 'events:PutEvents'
+                Effect: Allow
+                Resource: !Sub 
+                  - >-
+                    arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${eventBusName}
+                  - eventBusName: !Ref EventBusName
+        - PolicyName: WebhookFunctionRolePolicy1
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:DescribeSecret'
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref WebhookSecretsManager
+  WebhookFunctionUrl:
+    Type: 'AWS::Lambda::Url'
+    Properties:
+      TargetFunctionArn: !Ref WebhookFunction
+      AuthType: NONE
+  WebhookFunctionUrlPublicPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunctionUrl'
+      FunctionName: !Ref WebhookFunction
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+Outputs:
+  FunctionUrlEndpoint:
+    Description: "Webhhook Function URL Endpoint"
+    Value: !GetAtt WebhookFunctionUrl.FunctionUrl
+
+  LambdaFunctionName:
+    Value: !Ref WebhookFunction
+
+  LambdaFunctionARN:
+    Description: Lambda function ARN.
+    Value: !GetAtt WebhookFunction.Arn
